@@ -779,47 +779,10 @@ class splineBase(Base):
         self.h_spl = Sh @ self.bh_spl
 
 
-    def initialize_running_filter(self, run, dims, df, smooth='cr', shift=1):
-
-        """
-        Parameters
-        ==========
-
-        run : array_like, shape (n_samples, )
-            Recorded running activity.
-        dims : list or array_like, shape (ndims, )
-            Dimensions or shape of the response-history filter. It should be 1D [nt, ]
-        df : int
-            Degrees of freedom for spline basis.
-        smooth : str
-            Specifies the kind of splines. Can be one of the following:
-                * 'bs' (B-spline)
-                * 'cr' (natural cubic regression spline)
-                * 'cc' (cyclic cubic regression spline)
-                * 'tp' (truncated Thin Plate regression spline)
-        shift : int
-            Shift kernel to not predict itself. Should be 1 or larger.
-
-        """
-
-        self.run = run
-
-        Sr = np.array(build_spline_matrix([dims, ], [df, ], smooth))
-        rh = np.array(build_design_matrix(self.run[:, np.newaxis], Sr.shape[0], shift=shift))
-        rS = rh @ Sr
-
-        self.rh = np.array(rh)
-        self.Sr = Sr # spline basis for running filter
-        self.rS = rS
-        self.br_spl = np.linalg.solve(rS.T @ rS, rS.T @ run)
-        self.r_spl = Sr @ self.br_spl
-
-
     def fit(self, p0=None, extra=None, initialize='random',
             num_epochs=1, num_iters=3000, metric=None, alpha=1, beta=0.05, 
             fit_linear_filter=True, fit_intercept=True, fit_R=True,
             fit_history_filter=False, fit_nonlinearity=False,
-            fit_running_filter=False,
             step_size=1e-2, tolerance=10, verbose=100, random_seed=2046):
 
         """
@@ -830,13 +793,11 @@ class splineBase(Base):
         p0 : dict
             * 'b': Initial spline coefficients.
             * 'bh': Initial response history filter coefficients
-            * 'br': Initial running filter coefficients
 
         extra : dict
             Dictionary for test set.
             * 'X': stimulus of test set
             * 'y': response of test set
-            * 'run': running of test set (optional, if fit_running_filter=True)
 
         initialize : None or str
             Paramteric initalization. 
@@ -884,7 +845,6 @@ class splineBase(Base):
         self.fit_history_filter = fit_history_filter
         self.fit_nonlinearity = fit_nonlinearity
         self.fit_intercept = fit_intercept
-        self.fit_running_filter = fit_running_filter
 
         # initial parameters
 
@@ -912,11 +872,6 @@ class splineBase(Base):
                 p0.update({'bh': self.bh_spl})  
             else:
                 p0.update({'bh': None})
-        if 'br' not in dict_keys:
-            if hasattr(self, 'br_spl'):
-                p0.update({'br': self.br_spl})
-            else:
-                p0.update({'br': None})
 
         if 'nl_params' not in dict_keys:
             if hasattr(self, 'nl_params'):
@@ -936,11 +891,6 @@ class splineBase(Base):
                 yh_ext = np.array(build_design_matrix(extra['y'][:, np.newaxis], self.Sh.shape[0], shift=1))
                 yS_ext = yh_ext @ self.Sh
                 extra.update({'yS': yS_ext})
-            if hasattr(self, 'r_spl'):
-                r_ext = np.array(build_design_matrix(extra['run'][:, np.newaxis],
-                                                     self.Sr.shape[0], shift=1))
-                rS_ext = r_ext @ self.Sr
-                extra.update({'rS': rS_ext})
             
             extra = {key: np.array(extra[key]) for key in extra.keys()}
 
@@ -962,17 +912,13 @@ class splineBase(Base):
             self.bh_opt = self.p_opt['bh']
             self.h_opt = self.Sh @ self.bh_opt
 
-        if fit_running_filter:
-            self.br_opt = self.p_opt['br']
-            self.r_opt = self.Sr @ self.br_opt
-
         if fit_nonlinearity:
             self.nl_params_opt = self.p_opt['nl_params']
        
         if fit_intercept:
             self.intercept = self.p_opt['intercept']
 
-    def predict(self, X, y=None, run=None, p=None):
+    def predict(self, X, y=None, p=None):
 
         """
 
@@ -984,9 +930,6 @@ class splineBase(Base):
 
         y : None or array_like, shape (n_samples, )
             Recorded response. Needed when post-spike filter is fitted.
-
-        run : None or array_like, shape (n_samples, )
-            Recorded running activity. Needed when running filter is fitted.
 
         p : None or dict
             Model parameters. Only needed if model performance is monitored
@@ -1009,13 +952,6 @@ class splineBase(Base):
             yh = np.array(build_design_matrix(extra['y'][:, np.newaxis], self.Sh.shape[0], shift=1))
             yS = yh @ self.Sh
             extra.update({'yS': yS})
-
-        if hasattr(self, 'r_spl'):
-            extra['run'] = run
-            rh = np.array(build_design_matrix(extra['run'][:, np.newaxis], self.Sr.shape[0],
-                                              shift=1))
-            rS = rh @ self.Sr
-            extra.update({'rS': rS})
 
         params = self.p_opt if p is None else p
         y_pred = self.forward_pass(params, extra=extra)

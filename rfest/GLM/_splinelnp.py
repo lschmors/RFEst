@@ -33,12 +33,6 @@ class splineLNP(splineBase):
                 yS = extra['yS']
             else:
                 yS = self.yS
-
-        if hasattr(self, 'br_spl'):
-            if extra is not None and 'rS' in extra:
-                rS = extra['rS']
-            else:
-                rS = self.rS
         
         if self.fit_intercept:
             intercept = p['intercept'] 
@@ -82,19 +76,8 @@ class splineLNP(splineBase):
                 history_output = yS @ self.bh_spl
             else:
                 history_output = np.array([0.])
-
-        if self.fit_running_filter:
-            running_output = rS @ p['br']
-        else:
-            if hasattr(self, 'br_opt'):
-                running_output = rS @ self.br_opt
-            elif hasattr(self, 'br_spl'):
-                running_output = rS @ self.br_spl
-            else:
-                running_output = np.array([0.])
         
-        r = self.dt * R * self.fnl(filter_output + history_output + running_output +
-                                   intercept,
+        r = self.dt * R * self.fnl(filter_output + history_output + intercept,
                                    nl=self.nonlinearity, params=nl_params).flatten()
 
         return r
