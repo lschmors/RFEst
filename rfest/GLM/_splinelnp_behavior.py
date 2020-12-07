@@ -37,6 +37,12 @@ class splineLNPbehavior(splineBase):
             else:
                 rS = self.rS
 
+        if hasattr(self, 'be_spl'):
+            if extra is not None and 'eS' in extra:
+                eS = extra['eS']
+            else:
+                eS = self.eS
+
         if self.fit_intercept:
             intercept = p['intercept'] 
         else:
@@ -90,9 +96,20 @@ class splineLNPbehavior(splineBase):
             else:
                 running_output = np.array([0.])
 
+        if self.fit_eye_filter:
+            eye_output = eS @ p['be']
+        else:
+            if hasattr(self, 'be_opt'):
+                eye_output = eS @ self.be_opt
+            elif hasattr(self, 'be_spl'):
+                eye_output = eS @ self.be_spl
+            else:
+                eye_output = np.array([0.])
+
         r = self.dt * R * self.fnl(filter_output +
                                    history_output +
                                    running_output +
+                                   eye_output +
                                    intercept,
                                    nl=self.nonlinearity, params=nl_params).flatten()
 
@@ -157,11 +174,48 @@ class splineLNPbehavior(splineBase):
         self.br_spl = np.linalg.solve(rS.T @ rS, rS.T @ run)
         self.r_spl = Sr @ self.br_spl
 
+
+    def initialize_eye_filter(self, eye, dims, df, smooth='cr', shift=1):
+
+        """
+        Parameters
+        ==========
+
+        eye : array_like, shape (n_samples, )
+            Recorded pupil size.
+        dims : list or array_like, shape (ndims, )
+            Dimensions or shape of the response-history filter. It should be 1D [nt, ]
+        df : int
+            Degrees of freedom for spline basis.
+        smooth : str
+            Specifies the kind of splines. Can be one of the following:
+                * 'bs' (B-spline)
+                * 'cr' (natural cubic regression spline)
+                * 'cc' (cyclic cubic regression spline)
+                * 'tp' (truncated Thin Plate regression spline)
+        shift : int
+            Shift kernel to not predict itself. Should be 1 or larger.
+
+        """
+
+        self.eye = eye
+
+        Se = np.array(build_spline_matrix([dims, ], [df, ], smooth))
+        eh = np.array(build_design_matrix(self.eye[:, np.newaxis], Se.shape[0], shift=shift))
+        eS = eh @ Se
+
+        self.eh = np.array(eh)
+        self.Se = Se # spline basis for running filter
+        self.eS = eS
+        self.be_spl = np.linalg.solve(eS.T @ eS, eS.T @ eye)
+        self.e_spl = Se @ self.be_spl
+
+
     def fit(self, p0=None, extra=None, initialize='random',
             num_epochs=1, num_iters=3000, metric=None, alpha=1, beta=0.05,
             fit_linear_filter=True, fit_intercept=True, fit_R=True,
             fit_history_filter=False, fit_nonlinearity=False,
-            fit_running_filter=False,
+            fit_running_filter=False, fit_eye_filter=False,
             step_size=1e-2, tolerance=10, verbose=100, random_seed=2046):
 
         """
@@ -179,6 +233,7 @@ class splineLNPbehavior(splineBase):
             * 'X': stimulus of test set
             * 'y': response of test set
             * 'run': running of test set (optional, if fit_running_filter=True)
+            * 'eye': pupil size of test set (optional, if fit_eye_filter=True)
 
         initialize : None or str
             Paramteric initalization.
@@ -227,6 +282,7 @@ class splineLNPbehavior(splineBase):
         self.fit_nonlinearity = fit_nonlinearity
         self.fit_intercept = fit_intercept
         self.fit_running_filter = fit_running_filter
+        self.fit_eye_filter = fit_eye_filter
 
         # initial parameters
 
@@ -259,6 +315,11 @@ class splineLNPbehavior(splineBase):
                 p0.update({'br': self.br_spl})
             else:
                 p0.update({'br': None})
+        if 'be' not in dict_keys:
+            if hasattr(self, 'be_spl'):
+                p0.update({'be': self.be_spl})
+            else:
+                p0.update({'be': None})
 
         if 'nl_params' not in dict_keys:
             if hasattr(self, 'nl_params'):
@@ -286,6 +347,11 @@ class splineLNPbehavior(splineBase):
                                                      self.Sr.shape[0], shift=1))
                 rS_ext = r_ext @ self.Sr
                 extra.update({'rS': rS_ext})
+            if hasattr(self, 'e_spl'):
+                e_ext = np.array(build_design_matrix(extra['eye'][:, np.newaxis],
+                                                     self.Se.shape[0], shift=1))
+                eS_ext = e_ext @ self.Se
+                extra.update({'eS': eS_ext})
 
             extra = {key: np.array(extra[key]) for key in extra.keys()}
 
@@ -312,6 +378,10 @@ class splineLNPbehavior(splineBase):
             self.br_opt = self.p_opt['br']
             self.r_opt = self.Sr @ self.br_opt
 
+        if fit_eye_filter:
+            self.be_opt = self.p_opt['be']
+            self.e_opt = self.Se @ self.be_opt
+
         if fit_nonlinearity:
             self.nl_params_opt = self.p_opt['nl_params']
 
@@ -319,7 +389,7 @@ class splineLNPbehavior(splineBase):
             self.intercept = self.p_opt['intercept']
 
 
-    def predict(self, X, y=None, run=None, p=None):
+    def predict(self, X, y=None, run=None, eye=None, p=None):
 
         """
 
@@ -334,6 +404,9 @@ class splineLNPbehavior(splineBase):
 
         run : None or array_like, shape (n_samples, )
             Recorded running activity. Needed when running filter is fitted.
+
+        eye : None or array_like, shape (n_samples, )
+            Recorded pupil size. Needed when eye filter is fitted.
 
         p : None or dict
             Model parameters. Only needed if model performance is monitored
@@ -360,11 +433,22 @@ class splineLNPbehavior(splineBase):
             extra.update({'yS': yS})
 
         if hasattr(self, 'r_spl'):
+            if (run is None) & (self.fit_running_filter is True):
+                raise ValueError('`run` is needed for calculating response.')
             extra['run'] = run
             rh = np.array(build_design_matrix(extra['run'][:, np.newaxis], self.Sr.shape[0],
                                               shift=1))
             rS = rh @ self.Sr
             extra.update({'rS': rS})
+
+        if hasattr(self, 'e_spl'):
+            if (eye is None) & (self.fit_eye_filter is True):
+                raise ValueError('`eye` is needed for calculating response.')
+            extra['eye'] = eye
+            eh = np.array(build_design_matrix(extra['eye'][:, np.newaxis], self.Se.shape[0],
+                                              shift=1))
+            eS = eh @ self.Se
+            extra.update({'eS': eS})
 
         params = self.p_opt if p is None else p
         y_pred = self.forward_pass(params, extra=extra)
