@@ -43,6 +43,12 @@ class splineLNPbehavior(splineBase):
             else:
                 eS = self.eS
 
+        if hasattr(self, 'bo_spl'):
+            if extra is not None and 'oS' in extra:
+                oS = extra['oS']
+            else:
+                oS = self.oS
+
         if self.fit_intercept:
             intercept = p['intercept'] 
         else:
@@ -106,10 +112,21 @@ class splineLNPbehavior(splineBase):
             else:
                 eye_output = np.array([0.])
 
+        if self.fit_opto_filter:
+            opto_output = oS @ p['bo']
+        else:
+            if hasattr(self, 'bo_opt'):
+                opto_output = oS @ self.bo_opt
+            elif hasattr(self, 'bo_spl'):
+                opto_output = oS @ self.bo_spl
+            else:
+                opto_output = np.array([0.])
+
         r = self.dt * R * self.fnl(filter_output +
                                    history_output +
                                    running_output +
                                    eye_output +
+                                   opto_output +
                                    intercept,
                                    nl=self.nonlinearity, params=nl_params).flatten()
 
@@ -211,11 +228,48 @@ class splineLNPbehavior(splineBase):
         self.e_spl = Se @ self.be_spl
 
 
+    def initialize_opto_filter(self, opto, dims, df, smooth='cr', shift=1):
+
+        """
+        Parameters
+        ==========
+
+        opto : array_like, shape (n_samples, )
+            Recorded optogenetic stimulation.
+            Light is either on or of (array contains only 1.0 or 0.0)
+        dims : list or array_like, shape (ndims, )
+            Dimensions or shape of the response-history filter. It should be 1D [nt, ]
+        df : int
+            Degrees of freedom for spline basis.
+        smooth : str
+            Specifies the kind of splines. Can be one of the following:
+                * 'bs' (B-spline)
+                * 'cr' (natural cubic regression spline)
+                * 'cc' (cyclic cubic regression spline)
+                * 'tp' (truncated Thin Plate regression spline)
+        shift : int
+            Shift kernel to not predict itself. Should be 1 or larger.
+
+        """
+
+        self.opto = opto
+
+        So = np.array(build_spline_matrix([dims, ], [df, ], smooth))
+        oh = np.array(build_design_matrix(self.opto[:, np.newaxis], So.shape[0], shift=shift))
+        oS = oh @ So
+
+        self.oh = np.array(oh)
+        self.So = So # spline basis for opto filter
+        self.oS = oS
+        self.bo_spl = np.linalg.solve(oS.T @ oS, oS.T @ opto)
+        self.o_spl = So @ self.bo_spl
+
+
     def fit(self, p0=None, extra=None, initialize='random',
             num_epochs=1, num_iters=3000, metric=None, alpha=1, beta=0.05,
             fit_linear_filter=True, fit_intercept=True, fit_R=True,
             fit_history_filter=False, fit_nonlinearity=False,
-            fit_running_filter=False, fit_eye_filter=False,
+            fit_running_filter=False, fit_eye_filter=False, fit_opto_filter=False,
             step_size=1e-2, tolerance=10, verbose=100, random_seed=2046):
 
         """
@@ -227,6 +281,8 @@ class splineLNPbehavior(splineBase):
             * 'b': Initial spline coefficients.
             * 'bh': Initial response history filter coefficients
             * 'br': Initial running filter coefficients
+            * 'be': Initial eye filter coefficients
+            * 'bo': Initial opto filter coefficients
 
         extra : dict
             Dictionary for test set.
@@ -234,6 +290,7 @@ class splineLNPbehavior(splineBase):
             * 'y': response of test set
             * 'run': running of test set (optional, if fit_running_filter=True)
             * 'eye': pupil size of test set (optional, if fit_eye_filter=True)
+            * 'opto': optogenetic stimulation of test set (optional, if fit_opto_filter=True)
 
         initialize : None or str
             Paramteric initalization.
@@ -283,6 +340,7 @@ class splineLNPbehavior(splineBase):
         self.fit_intercept = fit_intercept
         self.fit_running_filter = fit_running_filter
         self.fit_eye_filter = fit_eye_filter
+        self.fit_opto_filter = fit_opto_filter
 
         # initial parameters
 
@@ -320,6 +378,11 @@ class splineLNPbehavior(splineBase):
                 p0.update({'be': self.be_spl})
             else:
                 p0.update({'be': None})
+        if 'bo' not in dict_keys:
+            if hasattr(self, 'bo_spl'):
+                p0.update({'bo': self.bo_spl})
+            else:
+                p0.update({'be': None})
 
         if 'nl_params' not in dict_keys:
             if hasattr(self, 'nl_params'):
@@ -352,6 +415,11 @@ class splineLNPbehavior(splineBase):
                                                      self.Se.shape[0], shift=1))
                 eS_ext = e_ext @ self.Se
                 extra.update({'eS': eS_ext})
+            if hasattr(self, 'o_spl'):
+                o_ext = np.array(build_design_matrix(extra['opto'][:, np.newaxis],
+                                                     self.So.shape[0], shift=1))
+                oS_ext = o_ext @ self.So
+                extra.update({'oS': oS_ext})
 
             extra = {key: np.array(extra[key]) for key in extra.keys()}
 
@@ -382,6 +450,10 @@ class splineLNPbehavior(splineBase):
             self.be_opt = self.p_opt['be']
             self.e_opt = self.Se @ self.be_opt
 
+        if fit_opto_filter:
+            self.bo_opt = self.p_opt['bo']
+            self.o_opt = self.So @ self.bo_opt
+
         if fit_nonlinearity:
             self.nl_params_opt = self.p_opt['nl_params']
 
@@ -389,7 +461,7 @@ class splineLNPbehavior(splineBase):
             self.intercept = self.p_opt['intercept']
 
 
-    def predict(self, X, y=None, run=None, eye=None, p=None):
+    def predict(self, X, y=None, run=None, eye=None, opto=None, p=None):
 
         """
 
@@ -407,6 +479,9 @@ class splineLNPbehavior(splineBase):
 
         eye : None or array_like, shape (n_samples, )
             Recorded pupil size. Needed when eye filter is fitted.
+
+        opto : None or array_like, shape (n_samples, )
+            Optogenetic light stimulation. Needed when eye filter is fitted.
 
         p : None or dict
             Model parameters. Only needed if model performance is monitored
@@ -449,6 +524,15 @@ class splineLNPbehavior(splineBase):
                                               shift=1))
             eS = eh @ self.Se
             extra.update({'eS': eS})
+
+        if hasattr(self, 'o_spl'):
+            if (opto is None) & (self.fit_opto_filter is True):
+                raise ValueError('`opto` is needed for calculating response.')
+            extra['opto'] = opto
+            oh = np.array(build_design_matrix(extra['opto'][:, np.newaxis], self.So.shape[0],
+                                              shift=1))
+            oS = oh @ self.So
+            extra.update({'oS': oS})
 
         params = self.p_opt if p is None else p
         y_pred = self.forward_pass(params, extra=extra)
