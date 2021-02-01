@@ -382,7 +382,7 @@ class splineLNPbehavior(splineBase):
             if hasattr(self, 'bo_spl'):
                 p0.update({'bo': self.bo_spl})
             else:
-                p0.update({'be': None})
+                p0.update({'bo': None})
 
         if 'nl_params' not in dict_keys:
             if hasattr(self, 'nl_params'):
