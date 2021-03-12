@@ -25,7 +25,7 @@ class splineLNPbehavior(splineBase):
 
         XS = self.XS if extra is None else extra['XS']
  
-        if hasattr(self, 'h_spl'):
+        if hasattr(self, 'bh_spl'):
             if extra is not None and 'yS' in extra:
                 yS = extra['yS']
             else:
