@@ -156,6 +156,40 @@ class splineLNPbehavior(splineBase):
         return neglogli
 
 
+    def initialize_history_filter(self, dims, df, smooth='cr', shift=1):
+
+        """
+
+        Parameters
+        ==========
+
+        dims : list or array_like, shape (ndims, )
+            Dimensions or shape of the response-history filter. It should be 1D [nt, ]
+
+        df : list or array_list
+            Number of basis.
+
+        smooth : str
+            Type of basis.
+
+        shift : int
+            Should be 1 or larger.
+
+        """
+        self.shift_h = shift
+        y = self.y
+        Sh = np.array(build_spline_matrix([dims, ], [df, ], smooth))  # for h
+        yh = np.array(build_design_matrix(self.y[:, np.newaxis], Sh.shape[0],
+                                          shift=self.shift_h))
+        yS = yh @ Sh
+
+        self.yh = np.array(yh)
+        self.Sh = Sh  # spline basis for spike-history
+        self.yS = yS
+        self.bh_spl = np.linalg.solve(yS.T @ yS, yS.T @ y)
+        self.h_spl = Sh @ self.bh_spl
+
+
     def initialize_running_filter(self, run, dims, df, smooth='cr', shift=1):
 
         """
@@ -402,7 +436,8 @@ class splineLNPbehavior(splineBase):
 
             if hasattr(self, 'h_spl'):
                 yh_ext = np.array(
-                    build_design_matrix(extra['y'][:, np.newaxis], self.Sh.shape[0], shift=1))
+                    build_design_matrix(extra['y'][:, np.newaxis], self.Sh.shape[0],
+                                        shift=self.shift_h))
                 yS_ext = yh_ext @ self.Sh
                 extra.update({'yS': yS_ext})
             if hasattr(self, 'r_spl'):
@@ -503,7 +538,8 @@ class splineLNPbehavior(splineBase):
                 raise ValueError('`y` is needed for calculating response history.')
 
             yh = np.array(
-                build_design_matrix(extra['y'][:, np.newaxis], self.Sh.shape[0], shift=1))
+                build_design_matrix(extra['y'][:, np.newaxis], self.Sh.shape[0],
+                                    shift=self.shift_h))
             yS = yh @ self.Sh
             extra.update({'yS': yS})
 
