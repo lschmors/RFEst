@@ -17,14 +17,13 @@ class splineLNPbehavior(splineBase):
         super().__init__(X, y, dims, df, smooth, compute_mle, **kwargs)
         self.nonlinearity = nonlinearity
 
-
     def forward_pass(self, p, extra=None):
         """
         Model ouput with current estimated parameters.
         """
 
         XS = self.XS if extra is None else extra['XS']
- 
+
         if hasattr(self, 'bh_spl'):
             if extra is not None and 'yS' in extra:
                 yS = extra['yS']
@@ -50,14 +49,50 @@ class splineLNPbehavior(splineBase):
                 oS = self.oS
 
         if self.fit_intercept:
-            intercept = p['intercept'] 
+            intercept = p['intercept']
+            # run
+            if hasattr(self, 'br_spl'):
+                intercept_r = p['intercept_r']
+            else:
+                intercept_r = 1.
+            # eye
+            if hasattr(self, 'be_spl'):
+                intercept_e = p['intercept_e']
+            else:
+                intercept_e = 1.
+            # opto
+            if hasattr(self, 'bo_spl'):
+                intercept_o = p['intercept_o']
+            else:
+                intercept_o = 1.
         else:
             if hasattr(self, 'intercept'):
                 intercept = self.intercept
+                # run
+                if hasattr(self, 'br_spl'):
+                    intercept_r = self.intercept_r
+                else:
+                    intercept_r = 1.
+                # eye
+                if hasattr(self, 'be_spl'):
+                    intercept_e = self.intercept_e
+                else:
+                    intercept_e = 1.
+                # opto
+                if hasattr(self, 'bo_spl'):
+                    intercept_o = self.intercept_o
+                else:
+                    intercept_o = 1.
             else:
                 intercept = 0.
-        
-        if self.fit_R: # maximum firing rate / scale factor
+                if hasattr(self, 'br_spl'):
+                    intercept_r = 1.
+                if hasattr(self, 'be_spl'):
+                    intercept_e = 1.
+                if hasattr(self, 'bo_spl'):
+                    intercept_o = 1.
+
+        if self.fit_R:  # maximum firing rate / scale factor
             R = p['R']
         else:
             if hasattr(self, 'R'):
@@ -122,13 +157,24 @@ class splineLNPbehavior(splineBase):
             else:
                 opto_output = np.array([0.])
 
-        r = self.dt * R * self.fnl(filter_output +
-                                   history_output +
-                                   running_output +
-                                   eye_output +
-                                   opto_output +
-                                   intercept,
-                                   nl=self.nonlinearity, params=nl_params).flatten()
+        # r = self.dt * R * self.fnl(filter_output +
+        #                           history_output +
+        #                           running_output +
+        #                           eye_output +
+        #                           opto_output +
+        #                           intercept,
+        #                           nl=self.nonlinearity, params=nl_params).flatten()
+
+        r = self.dt * R * \
+            (running_output + intercept_r) * \
+            (eye_output + intercept_e) * \
+            (opto_output + intercept_o) * \
+            self.fnl(
+            filter_output +
+            history_output +
+            intercept,
+            nl=self.nonlinearity,
+            params=nl_params).flatten()
 
         return r
 
@@ -393,6 +439,12 @@ class splineLNPbehavior(splineBase):
 
         if 'intercept' not in dict_keys:
             p0.update({'intercept': np.array([0.])})
+            if hasattr(self, 'br_spl'):
+                p0.update({'intercept_r': np.array([0.])})
+            if hasattr(self, 'be_spl'):
+                p0.update({'intercept_e': np.array([0.])})
+            if hasattr(self, 'bo_spl'):
+                p0.update({'intercept_o': np.array([0.])})
 
         if 'R' not in dict_keys:
             p0.update({'R': np.array([1.])})
@@ -494,6 +546,12 @@ class splineLNPbehavior(splineBase):
 
         if fit_intercept:
             self.intercept = self.p_opt['intercept']
+            if fit_running_filter:
+                self.intercept_r = self.p_opt['intercept_r']
+            if fit_eye_filter:
+                self.intercept_e = self.p_opt['intercept_e']
+            if fit_opto_filter:
+                self.intercept_o = self.p_opt['intercept_o']
 
 
     def predict(self, X, y=None, run=None, eye=None, opto=None, p=None):
